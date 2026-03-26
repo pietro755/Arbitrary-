@@ -1,0 +1,41 @@
+{
+  "name": "sui-arbitrage-bot",
+  "version": "1.0.0",
+  "description": "Automated arbitrage bot for the Sui blockchain — scans Cetus, Turbos, DeepBook, FlowX and Kriya for profitable cross-DEX opportunities.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "lint": "eslint 'src/**/*.ts'",
+    "test": "echo \"No tests configured\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pietro755/Arbitrary-.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/pietro755/Arbitrary-/issues"
+  },
+  "homepage": "https://github.com/pietro755/Arbitrary-#readme",
+  "dependencies": {
+    "@mysten/sui": "^2.11.0",
+    "@types/node": "^25.5.0",
+    "axios": "^1.13.6",
+    "dotenv": "^17.3.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@typescript-eslint/eslint-plugin": "^8.57.2",
+    "@typescript-eslint/parser": "^8.57.2",
+    "eslint": "^10.1.0",
+    "globals": "^17.4.0",
+    "tsx": "^4.21.0"
+  }
+}
