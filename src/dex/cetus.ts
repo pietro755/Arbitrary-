@@ -50,10 +50,24 @@ export class CetusAdapter implements DexAdapter {
           });
           const content = obj.data?.content;
           if (!content || content.dataType !== "moveObject") continue;
-          const fields = (content as { fields: Record<string, unknown> }).fields;
-          const coinTypeA = String(fields["coin_type_a"] ?? "");
-          const coinTypeB = String(fields["coin_type_b"] ?? "");
+
+          // Coin types are Move type parameters — they live in the object's
+          // type string (e.g. "...::pool::Pool<CoinA, CoinB>"), not as plain
+          // struct fields.  Extract them from the type string and normalise
+          // the address prefix so they match the canonical short forms used
+          // throughout the rest of the bot (e.g. "0x2::sui::SUI").
+          const moveType = (content as { type: string }).type ?? "";
+          const ltIdx = moveType.indexOf("<");
+          const gtIdx = moveType.lastIndexOf(">");
+          if (ltIdx < 0 || gtIdx < 0) continue;
+
+          const typeArgs = this.splitTypeArgs(moveType.slice(ltIdx + 1, gtIdx));
+          if (typeArgs.length < 2) continue;
+
+          const coinTypeA = this.normalizeAddress(typeArgs[0]);
+          const coinTypeB = this.normalizeAddress(typeArgs[1]);
           if (!coinTypeA || !coinTypeB) continue;
+
           pools.push({
             poolId: field.objectId,
             dexId: this.id,
@@ -151,6 +165,37 @@ export class CetusAdapter implements DexAdapter {
         a2b ? pool.coinTypeB : pool.coinTypeA
       )}, amountIn=${amountIn}, minOut=${minAmountOut}, sender=${senderAddress}`
     );
+  }
+
+  /**
+   * Split a comma-separated list of Move type arguments, correctly handling
+   * nested generic types (e.g. "Coin<X>, Balance<Y, Z>").
+   */
+  private splitTypeArgs(s: string): string[] {
+    const parts: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "<") depth++;
+      else if (s[i] === ">") depth--;
+      else if (s[i] === "," && depth === 0) {
+        parts.push(s.slice(start, i).trim());
+        start = i + 1;
+      }
+    }
+    parts.push(s.slice(start).trim());
+    return parts;
+  }
+
+  /**
+   * Normalise a Sui address prefix to its shortest form so that coin type
+   * strings are comparable regardless of how the RPC returns them.
+   * e.g. "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI"
+   *   → "0x2::sui::SUI"
+   * Keeps at least one hex digit so "0x0::..." stays "0x0::..." (never "0x::...").
+   */
+  private normalizeAddress(coinType: string): string {
+    return coinType.replace(/^0x0*([0-9a-fA-F])/, "0x$1");
   }
 
   private shortName(coinType: string): string {

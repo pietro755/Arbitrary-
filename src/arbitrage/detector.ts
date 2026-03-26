@@ -123,8 +123,6 @@ export class ArbitrageDetector {
             if (leg2.coinOut !== startToken) continue;
 
             const grossProfit = leg2.amountOut - amountIn;
-            if (grossProfit <= 0n) continue;
-
             const profitUsd = this.toUsd(grossProfit, startToken);
             const netProfitUsd = profitUsd - this.gasCostUsd;
 
@@ -257,8 +255,6 @@ export class ArbitrageDetector {
             if (q3.coinOut !== startToken) continue;
 
             const grossProfit = q3.amountOut - amountIn;
-            if (grossProfit <= 0n) continue;
-
             const profitUsd = this.toUsd(grossProfit, startToken);
             const netProfitUsd = profitUsd - this.gasCostUsd;
 
