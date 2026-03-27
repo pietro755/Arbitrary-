@@ -1,4 +1,4 @@
-import { SuiJsonRpcClient, DynamicFieldPage } from "@mysten/sui/jsonRpc";
+import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc";
 import { Transaction } from "@mysten/sui/transactions";
 import { DEX_IDS } from "../config/index.js";
 import { logger } from "../utils/logger.js";
@@ -17,6 +17,8 @@ import { DexAdapter, PoolInfo, QuoteResult } from "./types.js";
 export class CetusAdapter implements DexAdapter {
   readonly id = DEX_IDS.CETUS;
   readonly name = "Cetus";
+  private static readonly DEFAULT_FEE_RATE = 0.0025;
+  private static readonly DEFAULT_FEE_RATE_PPM = 2500;
 
   // Cetus Clmm package on mainnet
   private static readonly PACKAGE =
@@ -25,70 +27,39 @@ export class CetusAdapter implements DexAdapter {
   private static readonly GLOBAL_CONFIG =
     "0xdaa46292632c3c4d8f31f23ea0f9b36a28ff3677e9684980e4438403a67a3d8";
 
-  async fetchPools(client: SuiJsonRpcClient): Promise<PoolInfo[]> {
-    // Query dynamic fields of the Cetus pool registry to enumerate pools.
-    // The registry stores all created pools as dynamic object fields.
-    const registryId =
-      "0xf699e7f2276f5c9a75944b37a0c5b5d9ddfd2471bf6242483b03ab2887d198d0";
+  // Known high-liquidity Cetus pools (bootstrapped list)
+  private static readonly KNOWN_POOLS: PoolInfo[] = [
+    {
+      poolId:
+        "0xaa020ad81e1621d98d4fb82c4acb80dc064722f24ef828ab633bef50fc28268b",
+      dexId: DEX_IDS.CETUS,
+      coinTypeA:
+        "0x2::sui::SUI",
+      coinTypeB:
+        "0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN",
+      name: "SUI/USDC",
+    },
+    {
+      poolId:
+        "0x06d8af9e6afd27262db436f0d37b304a041f710c3ea1fa4c3a9bab36b3569ad3",
+      dexId: DEX_IDS.CETUS,
+      coinTypeA:
+        "0x2::sui::SUI",
+      coinTypeB:
+        "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN",
+      name: "SUI/USDT",
+    },
+  ];
 
-    const pools: PoolInfo[] = [];
-    let cursor: string | null | undefined = undefined;
-    let hasMore = true;
-
-    while (hasMore) {
-      const page: DynamicFieldPage = await client.getDynamicFields({
-        parentId: registryId,
-        cursor,
-        limit: 50,
-      });
-
-      for (const field of page.data) {
-        try {
-          const obj = await client.getObject({
-            id: field.objectId,
-            options: { showContent: true },
-          });
-          const content = obj.data?.content;
-          if (!content || content.dataType !== "moveObject") continue;
-
-          // Coin types are Move type parameters — they live in the object's
-          // type string (e.g. "...::pool::Pool<CoinA, CoinB>"), not as plain
-          // struct fields.  Extract them from the type string and normalise
-          // the address prefix so they match the canonical short forms used
-          // throughout the rest of the bot (e.g. "0x2::sui::SUI").
-          const moveType = (content as { type: string }).type ?? "";
-          const ltIdx = moveType.indexOf("<");
-          const gtIdx = moveType.lastIndexOf(">");
-          if (ltIdx < 0 || gtIdx < 0) continue;
-
-          const typeArgs = this.splitTypeArgs(moveType.slice(ltIdx + 1, gtIdx));
-          if (typeArgs.length < 2) continue;
-
-          const coinTypeA = this.normalizeAddress(typeArgs[0]);
-          const coinTypeB = this.normalizeAddress(typeArgs[1]);
-          if (!coinTypeA || !coinTypeB) continue;
-
-          pools.push({
-            poolId: field.objectId,
-            dexId: this.id,
-            coinTypeA,
-            coinTypeB,
-            name: `${this.shortName(coinTypeA)}/${this.shortName(coinTypeB)}`,
-          });
-        } catch {
-          // Skip unparseable pool objects
-        }
-      }
-
-      if (page.hasNextPage && page.nextCursor) {
-        cursor = page.nextCursor;
-      } else {
-        hasMore = false;
-      }
+  async fetchPools(_client: SuiJsonRpcClient): Promise<PoolInfo[]> {
+    try {
+      const pools = [...CetusAdapter.KNOWN_POOLS];
+      logger.info(`[Cetus] Using ${pools.length} known pools`);
+      return pools;
+    } catch (error) {
+      logger.error("[Cetus] Failed to fetch pools", error);
+      return [];
     }
-
-    logger.info(`[Cetus] Fetched ${pools.length} pools`);
-    return pools;
   }
 
   async getQuote(
@@ -108,8 +79,40 @@ export class CetusAdapter implements DexAdapter {
     }
 
     const fields = (content as { fields: Record<string, unknown> }).fields;
-    const sqrtPrice = BigInt(String(fields["current_sqrt_price"] ?? "0"));
-    const feeRate = Number(fields["fee_rate"] ?? 3000) / 1_000_000;
+    const currentSqrtPriceField = fields["current_sqrt_price"];
+    const directCurrentSqrtPrice =
+      typeof currentSqrtPriceField === "string" ||
+      typeof currentSqrtPriceField === "number" ||
+      typeof currentSqrtPriceField === "bigint"
+        ? currentSqrtPriceField.toString()
+        : null;
+
+    const sqrtPriceCandidates: Array<[string, string | null]> = [
+      [
+        "current_sqrt_price",
+        directCurrentSqrtPrice ?? this.readMoveFieldAsString(fields["current_sqrt_price"]),
+      ],
+      ["sqrt_price", this.readMoveFieldAsString(fields["sqrt_price"])],
+      [
+        "current_sqrt_price_x64",
+        this.readMoveFieldAsString(fields["current_sqrt_price_x64"]),
+      ],
+      ["sqrt_price_x64", this.readMoveFieldAsString(fields["sqrt_price_x64"])],
+    ];
+
+    const sqrtPriceEntry = sqrtPriceCandidates.find(([, value]) => value !== null);
+    if (!sqrtPriceEntry || !sqrtPriceEntry[1]) {
+      throw new Error(`Missing sqrt price field for Cetus pool ${pool.poolId}`);
+    }
+    const [sqrtFieldName, sqrtPriceRaw] = sqrtPriceEntry;
+    const sqrtPrice = this.readU128(sqrtPriceRaw);
+
+    const feeRate =
+      this.readNumber(fields["fee_rate"], CetusAdapter.DEFAULT_FEE_RATE_PPM) / 1_000_000;
+
+    logger.debug(
+      `[Cetus] Fetched sqrt price from ${sqrtFieldName}: ${sqrtPrice.toString()} (feeRate=${feeRate})`
+    );
 
     // Derive spot price from sqrt_price (Q64.64 fixed-point)
     // price = (sqrt_price / 2^64)^2  =>  coinB per coinA
@@ -167,35 +170,66 @@ export class CetusAdapter implements DexAdapter {
     );
   }
 
-  /**
-   * Split a comma-separated list of Move type arguments, correctly handling
-   * nested generic types (e.g. "Coin<X>, Balance<Y, Z>").
-   */
-  private splitTypeArgs(s: string): string[] {
-    const parts: string[] = [];
-    let depth = 0;
-    let start = 0;
-    for (let i = 0; i < s.length; i++) {
-      if (s[i] === "<") depth++;
-      else if (s[i] === ">") depth--;
-      else if (s[i] === "," && depth === 0) {
-        parts.push(s.slice(start, i).trim());
-        start = i + 1;
+  private readU128(value: unknown): bigint {
+    if (typeof value === "bigint" || typeof value === "number" || typeof value === "string") {
+      return BigInt(value);
+    }
+
+    if (value && typeof value === "object") {
+      const map = value as Record<string, unknown>;
+      if ("bits" in map) return this.readU128(map.bits);
+      if ("value" in map) return this.readU128(map.value);
+
+      if ("fields" in map && map.fields && typeof map.fields === "object") {
+        const nested = map.fields as Record<string, unknown>;
+        if ("bits" in nested) return this.readU128(nested.bits);
+        if ("value" in nested) return this.readU128(nested.value);
       }
     }
-    parts.push(s.slice(start).trim());
-    return parts;
+
+    throw new Error(`Unable to parse u128 value: ${String(value)}`);
   }
 
-  /**
-   * Normalise a Sui address prefix to its shortest form so that coin type
-   * strings are comparable regardless of how the RPC returns them.
-   * e.g. "0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI"
-   *   → "0x2::sui::SUI"
-   * Keeps at least one hex digit so "0x0::..." stays "0x0::..." (never "0x::...").
-   */
-  private normalizeAddress(coinType: string): string {
-    return coinType.replace(/^0x0*([0-9a-fA-F])/, "0x$1");
+  private readNumber(value: unknown, fallback: number): number {
+    if (typeof value === "number") return value;
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    }
+    if (typeof value === "bigint") return Number(value);
+
+    if (value && typeof value === "object") {
+      const map = value as Record<string, unknown>;
+      if ("bits" in map) return this.readNumber(map.bits, fallback);
+      if ("value" in map) return this.readNumber(map.value, fallback);
+      if ("fields" in map && map.fields && typeof map.fields === "object") {
+        const nested = map.fields as Record<string, unknown>;
+        if ("bits" in nested) return this.readNumber(nested.bits, fallback);
+        if ("value" in nested) return this.readNumber(nested.value, fallback);
+      }
+    }
+
+    return fallback;
+  }
+
+  private readMoveFieldAsString(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "bigint") {
+      return value.toString();
+    }
+
+    if (value && typeof value === "object") {
+      const map = value as Record<string, unknown>;
+      if ("bits" in map) return this.readMoveFieldAsString(map.bits);
+      if ("value" in map) return this.readMoveFieldAsString(map.value);
+      if ("fields" in map && map.fields && typeof map.fields === "object") {
+        const nested = map.fields as Record<string, unknown>;
+        if ("bits" in nested) return this.readMoveFieldAsString(nested.bits);
+        if ("value" in nested) return this.readMoveFieldAsString(nested.value);
+      }
+    }
+
+    return null;
   }
 
   private shortName(coinType: string): string {

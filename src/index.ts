@@ -149,15 +149,28 @@ async function main(): Promise<void> {
         amountIn: bigint
       ): Promise<QuoteResult | null> => {
         const adapter = adapterMap.get(pool.dexId);
-        if (!adapter) return null;
+        if (!adapter) {
+          logger.error("[Bot] Quote fetch failed: no adapter", {
+            dexId: pool.dexId,
+            poolId: pool.poolId,
+          });
+          return null;
+        }
         try {
           return await adapter.getQuote(client, pool, coinIn, amountIn);
-        } catch {
+        } catch (err) {
+          logger.error("[Bot] Quote fetch failed", {
+            dexId: pool.dexId,
+            poolId: pool.poolId,
+            coinIn,
+            amountIn: amountIn.toString(),
+            error: String(err),
+          });
           return null;
         }
       };
 
-      const opportunities = await detector.findOpportunities(
+      const { opportunities, checkedCount, failedQuotes } = await detector.findOpportunities(
         allPools,
         quoteFetcher,
         tradeSizeMist,
@@ -166,8 +179,7 @@ async function main(): Promise<void> {
 
       const profitable = opportunities.filter((o: { profitable: boolean }) => o.profitable);
       logger.info(
-        `[Bot] Scan complete — ${profitable.length} profitable opportunity(ies) found ` +
-          `out of ${opportunities.length} checked.`
+        `[Bot] Scan complete — ${checkedCount} checked, ${failedQuotes} failed, ${profitable.length} profitable.`
       );
 
       if (profitable.length > 0) {
