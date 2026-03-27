@@ -52,6 +52,14 @@ async function main(): Promise<void> {
     adapterList.map((a) => [a.id, a])
   );
 
+  // ── Pool failure tracking ─────────────────────────────────────────────
+  // Pools that consistently fail to read are silently skipped after
+  // POOL_FAILURE_THRESHOLD consecutive errors to reduce log noise.
+  // The counts and dead-set are cleared on every pool refresh.
+  const poolFailureCount = new Map<string, number>();
+  const deadPoolIds = new Set<string>();
+  const POOL_FAILURE_THRESHOLD = 5;
+
   // ── Fetch pools (once at startup, refresh every 10 minutes) ──────────
   let allPools: PoolInfo[] = [];
   let lastPoolRefresh = 0;
@@ -64,6 +72,8 @@ async function main(): Promise<void> {
 
   async function refreshPools(): Promise<void> {
     logger.info("[Bot] Refreshing pool list from all DEXes…");
+    poolFailureCount.clear();
+    deadPoolIds.clear();
     const poolArrays = await Promise.allSettled(
       adapterList.map((a) => a.fetchPools(client))
     );
@@ -148,6 +158,10 @@ async function main(): Promise<void> {
         coinIn: string,
         amountIn: bigint
       ): Promise<QuoteResult | null> => {
+        if (deadPoolIds.has(pool.poolId)) {
+          logger.debug(`[Bot] Skipping dead pool ${pool.poolId} (${pool.dexId})`);
+          return null;
+        }
         const adapter = adapterMap.get(pool.dexId);
         if (!adapter) {
           logger.error("[Bot] Quote fetch failed: no adapter", {
@@ -159,13 +173,24 @@ async function main(): Promise<void> {
         try {
           return await adapter.getQuote(client, pool, coinIn, amountIn);
         } catch (err) {
-          logger.error("[Bot] Quote fetch failed", {
-            dexId: pool.dexId,
-            poolId: pool.poolId,
-            coinIn,
-            amountIn: amountIn.toString(),
-            error: String(err),
-          });
+          const failures = (poolFailureCount.get(pool.poolId) ?? 0) + 1;
+          poolFailureCount.set(pool.poolId, failures);
+          if (failures >= POOL_FAILURE_THRESHOLD) {
+            deadPoolIds.add(pool.poolId);
+            logger.warn("[Bot] Pool marked unavailable after repeated failures", {
+              dexId: pool.dexId,
+              poolId: pool.poolId,
+              failures,
+            });
+          } else {
+            logger.error("[Bot] Quote fetch failed", {
+              dexId: pool.dexId,
+              poolId: pool.poolId,
+              coinIn,
+              amountIn: amountIn.toString(),
+              error: String(err),
+            });
+          }
           return null;
         }
       };

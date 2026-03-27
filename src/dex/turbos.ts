@@ -72,18 +72,31 @@ export class TurbosAdapter implements DexAdapter {
 
     // sqrt_price stored as Q64.96 (96 fractional bits)
     const sqrtPriceX96 = BigInt(String(fields["sqrt_price"] ?? "0"));
+    if (sqrtPriceX96 === 0n) {
+      throw new Error(`Turbos pool ${pool.poolId} has zero sqrt price`);
+    }
     const Q96 = BigInt(2) ** BigInt(96);
     // price = (sqrtPriceX96 / 2^96)^2
-    const priceFloat =
-      Number(sqrtPriceX96) / Number(Q96);
+    const priceFloat = Number(sqrtPriceX96) / Number(Q96);
+    if (!Number.isFinite(priceFloat) || priceFloat <= 0) {
+      throw new Error(`Turbos pool ${pool.poolId} has invalid sqrt price: ${sqrtPriceX96.toString()}`);
+    }
     const priceB_per_A = priceFloat * priceFloat;
+    if (!Number.isFinite(priceB_per_A) || priceB_per_A <= 0) {
+      throw new Error(`Turbos pool ${pool.poolId} has invalid derived price: ${priceB_per_A}`);
+    }
 
     const feeRate = Number(fields["fee"] ?? 3000) / 1_000_000;
     const a2b = coinIn === pool.coinTypeA;
     const spotPrice = a2b ? priceB_per_A : 1 / priceB_per_A;
-    const amountOut = BigInt(
-      Math.floor(Number(amountIn) * spotPrice * (1 - feeRate))
-    );
+    if (!Number.isFinite(spotPrice) || spotPrice <= 0) {
+      throw new Error(`Turbos pool ${pool.poolId} has invalid spot price: ${spotPrice}`);
+    }
+    const rawAmountOut = Math.floor(Number(amountIn) * spotPrice * (1 - feeRate));
+    if (!Number.isFinite(rawAmountOut) || rawAmountOut < 0) {
+      throw new Error(`Turbos pool ${pool.poolId} computed invalid amountOut: ${rawAmountOut}`);
+    }
+    const amountOut = BigInt(rawAmountOut);
 
     return {
       pool,

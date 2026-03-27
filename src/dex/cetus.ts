@@ -119,12 +119,20 @@ export class CetusAdapter implements DexAdapter {
     const Q64 = BigInt("18446744073709551616"); // 2^64
     const priceB_per_A =
       Number((sqrtPrice * sqrtPrice) / Q64) / Number(Q64);
+    if (!Number.isFinite(priceB_per_A) || priceB_per_A <= 0) {
+      throw new Error(`Cetus pool ${pool.poolId} has invalid sqrt price: ${sqrtPrice.toString()}`);
+    }
 
     const a2b = coinIn === pool.coinTypeA;
     const spotPrice = a2b ? priceB_per_A : 1 / priceB_per_A;
-    const amountOut = BigInt(
-      Math.floor(Number(amountIn) * spotPrice * (1 - feeRate))
-    );
+    if (!Number.isFinite(spotPrice) || spotPrice <= 0) {
+      throw new Error(`Cetus pool ${pool.poolId} has invalid spot price: ${spotPrice}`);
+    }
+    const rawAmountOut = Math.floor(Number(amountIn) * spotPrice * (1 - feeRate));
+    if (!Number.isFinite(rawAmountOut) || rawAmountOut < 0) {
+      throw new Error(`Cetus pool ${pool.poolId} computed invalid amountOut: ${rawAmountOut}`);
+    }
+    const amountOut = BigInt(rawAmountOut);
 
     return {
       pool,
