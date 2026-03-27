@@ -142,6 +142,7 @@ export class ArbitrageDetector {
             const grossProfit = leg2.amountOut - amountIn;
             const profitUsd = this.toUsd(grossProfit, startToken);
             const netProfitUsd = profitUsd - this.gasCostUsd;
+            if (!Number.isFinite(netProfitUsd)) continue;
 
             const description =
               `${this.shortName(startToken)} → ${this.shortName(coinMid)}` +
@@ -301,6 +302,7 @@ export class ArbitrageDetector {
             const grossProfit = q3.amountOut - amountIn;
             const profitUsd = this.toUsd(grossProfit, startToken);
             const netProfitUsd = profitUsd - this.gasCostUsd;
+            if (!Number.isFinite(netProfitUsd)) continue;
 
             const desc =
               `${this.shortName(startToken)}→${this.shortName(tokenB)}(${pool1.dexId})` +
@@ -360,6 +362,9 @@ export class ArbitrageDetector {
       "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::COIN";
 
     const amountFloat = Number(amount);
+    if (!Number.isFinite(amountFloat) || amountFloat < 0) {
+      return 0;
+    }
 
     if (coinType === SUI) {
       // SUI has 9 decimals
