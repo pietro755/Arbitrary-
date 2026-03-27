@@ -57,6 +57,11 @@ async function main(): Promise<void> {
   let lastPoolRefresh = 0;
   const POOL_REFRESH_INTERVAL = 10 * 60 * 1000;
 
+  const hasPoolsForStartToken = (): boolean =>
+    allPools.some(
+      (p) => p.coinTypeA === TOKENS.SUI || p.coinTypeB === TOKENS.SUI
+    );
+
   async function refreshPools(): Promise<void> {
     logger.info("[Bot] Refreshing pool list from all DEXes…");
     const poolArrays = await Promise.allSettled(
@@ -72,9 +77,23 @@ async function main(): Promise<void> {
     }
     logger.info(`[Bot] Total pools loaded: ${allPools.length}`);
 
+    if (allPools.length === 0) {
+      logger.warn("[Bot] No pools loaded — will retry immediately.");
+      lastPoolRefresh = 0;
+      return;
+    }
+
+    if (!hasPoolsForStartToken()) {
+      logger.warn(
+        "[Bot] No pools contain the start token (SUI) — will retry immediately."
+      );
+      lastPoolRefresh = 0;
+      return;
+    }
+
     // If we failed to load any pools, allow an immediate retry on the next tick
     // instead of waiting for the full refresh interval.
-    lastPoolRefresh = allPools.length === 0 ? 0 : Date.now();
+    lastPoolRefresh = Date.now();
   }
 
   await refreshPools();
@@ -115,10 +134,10 @@ async function main(): Promise<void> {
         await refreshPools();
       }
 
-      if (allPools.length === 0) {
-        logger.warn("[Bot] No pools available — attempting immediate refresh before skipping.");
+      if (allPools.length === 0 || !hasPoolsForStartToken()) {
+        logger.warn("[Bot] No pools available for the start token — attempting immediate refresh before skipping.");
         await refreshPools();
-        if (allPools.length === 0) {
+        if (allPools.length === 0 || !hasPoolsForStartToken()) {
           logger.warn("[Bot] No pools available after retry — skipping scan.");
           return;
         }
