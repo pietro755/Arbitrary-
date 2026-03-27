@@ -51,8 +51,9 @@ export class CetusAdapter implements DexAdapter {
 
   async fetchPools(_client: SuiJsonRpcClient): Promise<PoolInfo[]> {
     try {
-      logger.info(`[Cetus] Using ${CetusAdapter.KNOWN_POOLS.length} known pools`);
-      return [...CetusAdapter.KNOWN_POOLS];
+      const pools = [...CetusAdapter.KNOWN_POOLS];
+      logger.info(`[Cetus] Using ${pools.length} known pools`);
+      return pools;
     } catch (error) {
       logger.error("[Cetus] Failed to fetch pools", error);
       return [];
