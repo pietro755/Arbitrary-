@@ -71,7 +71,10 @@ async function main(): Promise<void> {
       }
     }
     logger.info(`[Bot] Total pools loaded: ${allPools.length}`);
-    lastPoolRefresh = Date.now();
+
+    // If we failed to load any pools, allow an immediate retry on the next tick
+    // instead of waiting for the full refresh interval.
+    lastPoolRefresh = allPools.length === 0 ? 0 : Date.now();
   }
 
   await refreshPools();
@@ -113,8 +116,12 @@ async function main(): Promise<void> {
       }
 
       if (allPools.length === 0) {
-        logger.warn("[Bot] No pools available — skipping scan.");
-        return;
+        logger.warn("[Bot] No pools available — attempting immediate refresh before skipping.");
+        await refreshPools();
+        if (allPools.length === 0) {
+          logger.warn("[Bot] No pools available after retry — skipping scan.");
+          return;
+        }
       }
 
       // Quote fetcher function passed to the detector
