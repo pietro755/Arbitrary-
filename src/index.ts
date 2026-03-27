@@ -91,8 +91,7 @@ async function main(): Promise<void> {
       return;
     }
 
-    // If we failed to load any pools, allow an immediate retry on the next tick
-    // instead of waiting for the full refresh interval.
+    // Only mark refresh time once we have usable pools for the start token.
     lastPoolRefresh = Date.now();
   }
 
