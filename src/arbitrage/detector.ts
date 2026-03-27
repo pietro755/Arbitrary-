@@ -31,6 +31,12 @@ export interface ArbitrageOpportunity {
   profitAfterGasUsd: number;
 }
 
+export interface FindOpportunitiesResult {
+  opportunities: ArbitrageOpportunity[];
+  checkedCount: number;
+  failedQuotes: number;
+}
+
 /**
  * Finds all two-leg arbitrage opportunities across a set of DEX pools.
  *
@@ -69,9 +75,10 @@ export class ArbitrageDetector {
     ) => Promise<QuoteResult | null>,
     amountIn: bigint,
     startToken: string
-  ): Promise<ArbitrageOpportunity[]> {
+  ): Promise<FindOpportunitiesResult> {
     const opportunities: ArbitrageOpportunity[] = [];
     let checkedRoutes = 0;
+    let failedQuotes = 0;
 
     // Build a map from token-pair key → pools that trade that pair
     const pairMap = new Map<string, PoolInfo[]>();
@@ -113,14 +120,22 @@ export class ArbitrageDetector {
           try {
             checkedRoutes += 1;
             const leg1 = await quoteFetcher(buyPool, startToken, amountIn);
-            if (!leg1 || leg1.amountOut === 0n) continue;
+            if (!leg1) {
+              failedQuotes += 1;
+              continue;
+            }
+            if (leg1.amountOut === 0n) continue;
 
             const leg2 = await quoteFetcher(
               sellPool,
               coinMid,
               leg1.amountOut
             );
-            if (!leg2 || leg2.amountOut === 0n) continue;
+            if (!leg2) {
+              failedQuotes += 1;
+              continue;
+            }
+            if (leg2.amountOut === 0n) continue;
 
             if (leg2.coinOut !== startToken) continue;
 
@@ -175,6 +190,7 @@ export class ArbitrageDetector {
               );
             }
           } catch (err) {
+            failedQuotes += 1;
             logger.debug(`[Arbitrage] Quote error for pair: ${err}`);
           }
         }
@@ -191,16 +207,22 @@ export class ArbitrageDetector {
       pairMap
     );
     checkedRoutes += threeLegs.checkedRoutes;
+    failedQuotes += threeLegs.failedQuotes;
     opportunities.push(...threeLegs.opportunities);
+    const profitableCount = opportunities.filter((o) => o.profitable).length;
 
     logger.info(
-      `[Arbitrage] Checked ${checkedRoutes} route(s), found ${opportunities.length} opportunity(ies).`
+      `[Arbitrage] ${checkedRoutes} checked, ${failedQuotes} failed, ${profitableCount} profitable.`
     );
 
     // Sort by profit descending
-    return opportunities.sort(
-      (a, b) => b.profitAfterGasUsd - a.profitAfterGasUsd
-    );
+    return {
+      opportunities: opportunities.sort(
+        (a, b) => b.profitAfterGasUsd - a.profitAfterGasUsd
+      ),
+      checkedCount: checkedRoutes,
+      failedQuotes,
+    };
   }
 
   private async findTriangularOpportunities(
@@ -213,9 +235,10 @@ export class ArbitrageDetector {
     amountIn: bigint,
     startToken: string,
     _pairMap: Map<string, PoolInfo[]>
-  ): Promise<{ opportunities: ArbitrageOpportunity[]; checkedRoutes: number }> {
+  ): Promise<{ opportunities: ArbitrageOpportunity[]; checkedRoutes: number; failedQuotes: number }> {
     const opps: ArbitrageOpportunity[] = [];
     let checkedRoutes = 0;
+    let failedQuotes = 0;
 
     // Find all pools containing startToken as leg1
     const leg1Pools = pools.filter(
@@ -253,13 +276,25 @@ export class ArbitrageDetector {
           try {
             checkedRoutes += 1;
             const q1 = await quoteFetcher(pool1, startToken, amountIn);
-            if (!q1 || q1.amountOut === 0n) continue;
+            if (!q1) {
+              failedQuotes += 1;
+              continue;
+            }
+            if (q1.amountOut === 0n) continue;
 
             const q2 = await quoteFetcher(pool2, tokenB, q1.amountOut);
-            if (!q2 || q2.amountOut === 0n) continue;
+            if (!q2) {
+              failedQuotes += 1;
+              continue;
+            }
+            if (q2.amountOut === 0n) continue;
 
             const q3 = await quoteFetcher(pool3, tokenC, q2.amountOut);
-            if (!q3 || q3.amountOut === 0n) continue;
+            if (!q3) {
+              failedQuotes += 1;
+              continue;
+            }
+            if (q3.amountOut === 0n) continue;
 
             if (q3.coinOut !== startToken) continue;
 
@@ -293,6 +328,7 @@ export class ArbitrageDetector {
               logger.info(`[Arbitrage] ✅ Triangular: ${desc} | profit ≈ $${netProfitUsd.toFixed(4)}`);
             }
           } catch (err) {
+            failedQuotes += 1;
             logger.debug(`[Arbitrage] Triangular quote error: ${err}`);
           }
         }
@@ -302,6 +338,7 @@ export class ArbitrageDetector {
     return {
       opportunities: opps,
       checkedRoutes,
+      failedQuotes,
     };
   }
 

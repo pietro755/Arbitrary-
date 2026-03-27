@@ -170,7 +170,7 @@ async function main(): Promise<void> {
         }
       };
 
-      const opportunities = await detector.findOpportunities(
+      const { opportunities, checkedCount, failedQuotes } = await detector.findOpportunities(
         allPools,
         quoteFetcher,
         tradeSizeMist,
@@ -179,8 +179,7 @@ async function main(): Promise<void> {
 
       const profitable = opportunities.filter((o: { profitable: boolean }) => o.profitable);
       logger.info(
-        `[Bot] Scan complete — ${profitable.length} profitable opportunity(ies) found ` +
-          `out of ${opportunities.length} checked.`
+        `[Bot] Scan complete — ${checkedCount} checked, ${failedQuotes} failed, ${profitable.length} profitable.`
       );
 
       if (profitable.length > 0) {
