@@ -150,17 +150,22 @@ async function main(): Promise<void> {
       ): Promise<QuoteResult | null> => {
         const adapter = adapterMap.get(pool.dexId);
         if (!adapter) {
-          logger.error(
-            `[Bot] Quote fetch failed: no adapter for dexId=${pool.dexId} pool=${pool.poolId}`
-          );
+          logger.error("[Bot] Quote fetch failed: no adapter", {
+            dexId: pool.dexId,
+            poolId: pool.poolId,
+          });
           return null;
         }
         try {
           return await adapter.getQuote(client, pool, coinIn, amountIn);
         } catch (err) {
-          logger.error(
-            `[Bot] Quote fetch failed: dex=${pool.dexId} pool=${pool.poolId} coinIn=${coinIn} amountIn=${amountIn.toString()} error=${err}`
-          );
+          logger.error("[Bot] Quote fetch failed", {
+            dexId: pool.dexId,
+            poolId: pool.poolId,
+            coinIn,
+            amountIn: amountIn.toString(),
+            error: String(err),
+          });
           return null;
         }
       };
