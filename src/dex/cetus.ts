@@ -17,6 +17,8 @@ import { DexAdapter, PoolInfo, QuoteResult } from "./types.js";
 export class CetusAdapter implements DexAdapter {
   readonly id = DEX_IDS.CETUS;
   readonly name = "Cetus";
+  private static readonly DEFAULT_FEE_RATE = 0.0025;
+  private static readonly DEFAULT_FEE_RATE_PPM = 2500;
 
   // Cetus Clmm package on mainnet
   private static readonly PACKAGE =
@@ -77,8 +79,40 @@ export class CetusAdapter implements DexAdapter {
     }
 
     const fields = (content as { fields: Record<string, unknown> }).fields;
-    const sqrtPrice = this.readU128(fields["current_sqrt_price"]);
-    const feeRate = this.readNumber(fields["fee_rate"], 3000) / 1_000_000;
+    const currentSqrtPriceField = fields["current_sqrt_price"];
+    const directCurrentSqrtPrice =
+      typeof currentSqrtPriceField === "string" ||
+      typeof currentSqrtPriceField === "number" ||
+      typeof currentSqrtPriceField === "bigint"
+        ? currentSqrtPriceField.toString()
+        : null;
+
+    const sqrtPriceCandidates: Array<[string, string | null]> = [
+      [
+        "current_sqrt_price",
+        directCurrentSqrtPrice ?? this.readMoveFieldAsString(fields["current_sqrt_price"]),
+      ],
+      ["sqrt_price", this.readMoveFieldAsString(fields["sqrt_price"])],
+      [
+        "current_sqrt_price_x64",
+        this.readMoveFieldAsString(fields["current_sqrt_price_x64"]),
+      ],
+      ["sqrt_price_x64", this.readMoveFieldAsString(fields["sqrt_price_x64"])],
+    ];
+
+    const sqrtPriceEntry = sqrtPriceCandidates.find(([, value]) => value !== null);
+    if (!sqrtPriceEntry || !sqrtPriceEntry[1]) {
+      throw new Error(`Missing sqrt price field for Cetus pool ${pool.poolId}`);
+    }
+    const [sqrtFieldName, sqrtPriceRaw] = sqrtPriceEntry;
+    const sqrtPrice = this.readU128(sqrtPriceRaw);
+
+    const feeRate =
+      this.readNumber(fields["fee_rate"], CetusAdapter.DEFAULT_FEE_RATE_PPM) / 1_000_000;
+
+    logger.debug(
+      `[Cetus] Fetched sqrt price from ${sqrtFieldName}: ${sqrtPrice.toString()} (feeRate=${feeRate})`
+    );
 
     // Derive spot price from sqrt_price (Q64.64 fixed-point)
     // price = (sqrt_price / 2^64)^2  =>  coinB per coinA
@@ -153,7 +187,7 @@ export class CetusAdapter implements DexAdapter {
       }
     }
 
-    return BigInt(0);
+    throw new Error(`Unable to parse u128 value: ${String(value)}`);
   }
 
   private readNumber(value: unknown, fallback: number): number {
@@ -176,6 +210,26 @@ export class CetusAdapter implements DexAdapter {
     }
 
     return fallback;
+  }
+
+  private readMoveFieldAsString(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "bigint") {
+      return value.toString();
+    }
+
+    if (value && typeof value === "object") {
+      const map = value as Record<string, unknown>;
+      if ("bits" in map) return this.readMoveFieldAsString(map.bits);
+      if ("value" in map) return this.readMoveFieldAsString(map.value);
+      if ("fields" in map && map.fields && typeof map.fields === "object") {
+        const nested = map.fields as Record<string, unknown>;
+        if ("bits" in nested) return this.readMoveFieldAsString(nested.bits);
+        if ("value" in nested) return this.readMoveFieldAsString(nested.value);
+      }
+    }
+
+    return null;
   }
 
   private shortName(coinType: string): string {
