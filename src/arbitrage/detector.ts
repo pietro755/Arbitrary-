@@ -71,6 +71,7 @@ export class ArbitrageDetector {
     startToken: string
   ): Promise<ArbitrageOpportunity[]> {
     const opportunities: ArbitrageOpportunity[] = [];
+    let checkedRoutes = 0;
 
     // Build a map from token-pair key → pools that trade that pair
     const pairMap = new Map<string, PoolInfo[]>();
@@ -110,6 +111,7 @@ export class ArbitrageDetector {
           }
 
           try {
+            checkedRoutes += 1;
             const leg1 = await quoteFetcher(buyPool, startToken, amountIn);
             if (!leg1 || leg1.amountOut === 0n) continue;
 
@@ -188,7 +190,12 @@ export class ArbitrageDetector {
       startToken,
       pairMap
     );
-    opportunities.push(...threeLegs);
+    checkedRoutes += threeLegs.checkedRoutes;
+    opportunities.push(...threeLegs.opportunities);
+
+    logger.info(
+      `[Arbitrage] Checked ${checkedRoutes} route(s), found ${opportunities.length} opportunity(ies).`
+    );
 
     // Sort by profit descending
     return opportunities.sort(
@@ -206,8 +213,9 @@ export class ArbitrageDetector {
     amountIn: bigint,
     startToken: string,
     _pairMap: Map<string, PoolInfo[]>
-  ): Promise<ArbitrageOpportunity[]> {
+  ): Promise<{ opportunities: ArbitrageOpportunity[]; checkedRoutes: number }> {
     const opps: ArbitrageOpportunity[] = [];
+    let checkedRoutes = 0;
 
     // Find all pools containing startToken as leg1
     const leg1Pools = pools.filter(
@@ -243,6 +251,7 @@ export class ArbitrageDetector {
           if (dexSet.size < 2) continue;
 
           try {
+            checkedRoutes += 1;
             const q1 = await quoteFetcher(pool1, startToken, amountIn);
             if (!q1 || q1.amountOut === 0n) continue;
 
@@ -290,7 +299,10 @@ export class ArbitrageDetector {
       }
     }
 
-    return opps;
+    return {
+      opportunities: opps,
+      checkedRoutes,
+    };
   }
 
   private pairKey(coinA: string, coinB: string): string {

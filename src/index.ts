@@ -149,10 +149,18 @@ async function main(): Promise<void> {
         amountIn: bigint
       ): Promise<QuoteResult | null> => {
         const adapter = adapterMap.get(pool.dexId);
-        if (!adapter) return null;
+        if (!adapter) {
+          logger.error(
+            `[Bot] Quote fetch failed: no adapter for dexId=${pool.dexId} pool=${pool.poolId}`
+          );
+          return null;
+        }
         try {
           return await adapter.getQuote(client, pool, coinIn, amountIn);
-        } catch {
+        } catch (err) {
+          logger.error(
+            `[Bot] Quote fetch failed: dex=${pool.dexId} pool=${pool.poolId} coinIn=${coinIn} amountIn=${amountIn.toString()} error=${err}`
+          );
           return null;
         }
       };
